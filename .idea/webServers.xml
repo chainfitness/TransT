@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="5f549f3b-e632-43fb-b2c9-ed6ecc5f4a7b" name="213server">
+        <fileTransfer rootFolder="/home/rzh/win-pycharm/Trans-T" accessType="SFTP" host="192.168.0.213" port="22" sshConfigId="c267337d-f779-4bb4-bdaf-4337f429daf9" sshConfig="flow-stream-server213">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
