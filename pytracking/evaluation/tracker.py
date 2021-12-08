@@ -16,13 +16,12 @@ from pathlib import Path
 import torch
 import ltr.data.processing_utils as prutils
 
-
 _tracker_disp_colors = {1: (0, 255, 0), 2: (0, 0, 255), 3: (255, 0, 0),
                         4: (255, 255, 255), 5: (0, 0, 0), 6: (0, 255, 128),
                         7: (123, 123, 123), 8: (255, 128, 0), 9: (128, 0, 255)}
 
 
-def trackerlist(name: str, parameter_name: str, run_ids = None, display_name: str = None):
+def trackerlist(name: str, parameter_name: str, run_ids=None, display_name: str = None):
     """Generate list of trackers.
     args:
         name: Name of tracking method.
@@ -44,13 +43,16 @@ class Tracker:
         display_name: Name to be displayed in the result plots.
     """
 
-    def __init__(self, name: str, parameter_name: str, run_id: int = None, display_name: str = None):
+    def __init__(self, name: str, parameter_name: str, run_id: int = None, display_name: str = None,
+                 save_video: str = "", sfps: float = 15.0):
         assert run_id is None or isinstance(run_id, int)
 
         self.name = name
         self.parameter_name = parameter_name
         self.run_id = run_id
         self.display_name = display_name
+        self.save_video = save_video
+        self.sfps = sfps
 
         env = env_settings()
         if self.run_id is None:
@@ -58,7 +60,8 @@ class Tracker:
             self.segmentation_dir = '{}/{}/{}'.format(env.segmentation_path, self.name, self.parameter_name)
         else:
             self.results_dir = '{}/{}/{}_{:03d}'.format(env.results_path, self.name, self.parameter_name, self.run_id)
-            self.segmentation_dir = '{}/{}/{}_{:03d}'.format(env.segmentation_path, self.name, self.parameter_name, self.run_id)
+            self.segmentation_dir = '{}/{}/{}_{:03d}'.format(env.segmentation_path, self.name, self.parameter_name,
+                                                             self.run_id)
 
         tracker_module_abspath = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'tracker', self.name))
         if os.path.isdir(tracker_module_abspath):
@@ -68,7 +71,6 @@ class Tracker:
             self.tracker_class = None
 
         self.visdom = None
-
 
     def _init_visdom(self, visdom_info, debug):
         visdom_info = {} if visdom_info is None else visdom_info
@@ -97,7 +99,6 @@ class Tracker:
 
             elif data['key'] == 'ArrowRight' and self.pause_mode:
                 self.step = True
-
 
     def create_tracker(self, params):
         tracker = self.tracker_class(params)
@@ -277,71 +278,57 @@ class Tracker:
         if success is not True:
             print("Read frame from {} failed.".format(videofilepath))
             exit(-1)
+        writer = None
+        init_state = None
         if optional_box is not None:
             assert isinstance(optional_box, (list, tuple))
             assert len(optional_box) == 4, "valid box's foramt is [x,y,w,h]"
             tracker.initialize(frame, _build_init_info(optional_box))
             output_boxes.append(optional_box)
         else:
-            while True:
-                # cv.waitKey()
-                frame_disp = frame.copy()
-
-                cv.putText(frame_disp, 'Select target ROI and press ENTER', (20, 30), cv.FONT_HERSHEY_COMPLEX_SMALL,
-                           1.5, (0, 0, 0), 1)
-
-                x, y, w, h = cv.selectROI(display_name, frame_disp, fromCenter=False)
-                init_state = [x, y, w, h]
-                tracker.initialize(frame, _build_init_info(init_state))
-                output_boxes.append(init_state)
-                break
-
-        while True:
-            ret, frame = cap.read()
-
-            if frame is None:
-                break
-
-            frame_disp = frame.copy()
-
-            # Draw box
-            out = tracker.track(frame)
-            state = [int(s) for s in out['target_bbox'][1]]
-            output_boxes.append(state)
-
-            cv.rectangle(frame_disp, (state[0], state[1]), (state[2] + state[0], state[3] + state[1]),
-                         (0, 255, 0), 5)
-
-            font_color = (0, 0, 0)
-            cv.putText(frame_disp, 'Tracking!', (20, 30), cv.FONT_HERSHEY_COMPLEX_SMALL, 1,
-                       font_color, 1)
-            cv.putText(frame_disp, 'Press r to reset', (20, 55), cv.FONT_HERSHEY_COMPLEX_SMALL, 1,
-                       font_color, 1)
-            cv.putText(frame_disp, 'Press q to quit', (20, 80), cv.FONT_HERSHEY_COMPLEX_SMALL, 1,
-                       font_color, 1)
-
-            # Display the resulting frame
-            cv.imshow(display_name, frame_disp)
-            key = cv.waitKey(1)
-            if key == ord('q'):
-                break
-            elif key == ord('r'):
+            while 1:
                 ret, frame = cap.read()
                 frame_disp = frame.copy()
+                key = 255
+                key = cv.waitKey(1) & 0xff
+                tmp_text = "press 's' to select a box\npress 'q' to quit"
+                y0, dy = 50, 25
+                for i, txt in enumerate(tmp_text.split('\n')):
+                    y = y0 + i*dy
+                    cv.putText(frame_disp, text=txt, org=(0, y), fontFace=cv.FONT_HERSHEY_COMPLEX, fontScale=1, color=(0, 255, 0),thickness=2)
+                if key == ord("s"):
+                    frame_disp = frame.copy()
 
-                cv.putText(frame_disp, 'Select target ROI and press ENTER', (20, 30), cv.FONT_HERSHEY_COMPLEX_SMALL, 1.5,
-                           (0, 0, 0), 1)
+                    x, y, w, h = cv.selectROI(display_name, frame_disp, False, False)
+                    init_state = [x, y, w, h]
+                    tracker.initialize(frame_disp, _build_init_info(init_state))
+                    output_boxes.append(init_state)
+                    if self.save_video != "":
+                        fourcc = cv.VideoWriter_fourcc(*'MP42')
+                        size = (frame_disp.shape[1], frame_disp.shape[0])
+                        writer = cv.VideoWriter(self.save_video, fourcc, self.sfps, size)
 
+                elif key == ord("q"):
+                    break
+                if init_state is not None:
+                    time_s = time.time()
+                    out = tracker.track(frame_disp)
+                    time_cost = time.time() - time_s
+                    FPS = round(1 / time_cost, 2)
+                    state = [int(s) for s in out['target_bbox'][1]]
+                    output_boxes.append(state)
+                    cv.putText(frame_disp, f"FPS:{FPS}", org=(0, 25), fontFace=cv.FONT_HERSHEY_COMPLEX, fontScale=1,
+                                color=(0, 0, 255), thickness=2)
+                    cv.rectangle(frame_disp, (state[0], state[1]), (state[2] + state[0], state[3] + state[1]),
+                                 (0, 255, 0), 3)
                 cv.imshow(display_name, frame_disp)
-                x, y, w, h = cv.selectROI(display_name, frame_disp, fromCenter=False)
-                init_state = [x, y, w, h]
-                tracker.initialize(frame, _build_init_info(init_state))
-                output_boxes.append(init_state)
-
-        # When everything done, release the capture
-        cap.release()
-        cv.destroyAllWindows()
-
+                if self.save_video !="" and writer != None:
+                    writer.write(frame_disp)
+                cv.waitKey(1)
+            if writer != None:
+                writer.release()
+            cap.release()
+            cv.destroyAllWindows()
         if save_results:
             if not os.path.exists(self.results_dir):
                 os.makedirs(self.results_dir)
@@ -351,6 +338,75 @@ class Tracker:
             tracked_bb = np.array(output_boxes).astype(int)
             bbox_file = '{}.txt'.format(base_results_path)
             np.savetxt(bbox_file, tracked_bb, delimiter='\t', fmt='%d')
+            # while True:
+            #     # cv.waitKey()
+            #     frame_disp = frame.copy()
+            #
+            #     cv.putText(frame_disp, 'Select target ROI and press ENTER', (20, 30), cv.FONT_HERSHEY_COMPLEX_SMALL,
+            #                1.5, (0, 0, 255), 1)
+            #
+            #     x, y, w, h = cv.selectROI(display_name, frame_disp, fromCenter=False)
+            #     init_state = [x, y, w, h]
+            #     tracker.initialize(frame, _build_init_info(init_state))
+            #     output_boxes.append(init_state)
+            #     break
+        #
+        # while True:
+        #     ret, frame = cap.read()
+        #
+        #     if frame is None:
+        #         break
+        #
+        #     frame_disp = frame.copy()
+        #
+        #     # Draw box
+        #     out = tracker.track(frame)
+        #     state = [int(s) for s in out['target_bbox'][1]]
+        #     output_boxes.append(state)
+        #
+        #     cv.rectangle(frame_disp, (state[0], state[1]), (state[2] + state[0], state[3] + state[1]),
+        #                  (0, 255, 0), 5)
+        #
+        #     font_color = (0, 0, 0)
+        #     cv.putText(frame_disp, 'Tracking!', (20, 30), cv.FONT_HERSHEY_COMPLEX_SMALL, 1,
+        #                font_color, 1)
+        #     cv.putText(frame_disp, 'Press r to reset', (20, 55), cv.FONT_HERSHEY_COMPLEX_SMALL, 1,
+        #                font_color, 1)
+        #     cv.putText(frame_disp, 'Press q to quit', (20, 80), cv.FONT_HERSHEY_COMPLEX_SMALL, 1,
+        #                font_color, 1)
+        #
+        #     # Display the resulting frame
+        #     cv.imshow(display_name, frame_disp)
+        #     key = cv.waitKey(1)
+        #     if key == ord('q'):
+        #         break
+        #     elif key == ord('r'):
+        #         ret, frame = cap.read()
+        #         frame_disp = frame.copy()
+        #
+        #         cv.putText(frame_disp, 'Select target ROI and press ENTER', (20, 30), cv.FONT_HERSHEY_COMPLEX_SMALL,
+        #                    1.5,
+        #                    (0, 0, 0), 1)
+        #
+        #         cv.imshow(display_name, frame_disp)
+        #         x, y, w, h = cv.selectROI(display_name, frame_disp, fromCenter=False)
+        #         init_state = [x, y, w, h]
+        #         tracker.initialize(frame, _build_init_info(init_state))
+        #         output_boxes.append(init_state)
+        #
+        # # When everything done, release the capture
+        # cap.release()
+        # cv.destroyAllWindows()
+        #
+        # if save_results:
+        #     if not os.path.exists(self.results_dir):
+        #         os.makedirs(self.results_dir)
+        #     video_name = Path(videofilepath).stem
+        #     base_results_path = os.path.join(self.results_dir, 'video_{}'.format(video_name))
+        #
+        #     tracked_bb = np.array(output_boxes).astype(int)
+        #     bbox_file = '{}.txt'.format(base_results_path)
+        #     np.savetxt(bbox_file, tracked_bb, delimiter='\t', fmt='%d')
 
     def run_webcam(self, debug=None, visdom_info=None):
         """Run the tracker with the webcam.
@@ -578,7 +634,6 @@ class Tracker:
             elif tracker.params.visualization:
                 self.visualize(image, out['target_bbox'], segmentation)
 
-
     def run_vot(self, debug=None, visdom_info=None):
         params = self.get_parameters()
         params.tracker_name = self.name
@@ -656,13 +711,11 @@ class Tracker:
         params = param_module.parameters()
         return params
 
-
     def init_visualization(self):
         self.pause_mode = False
         self.fig, self.ax = plt.subplots(1)
         self.fig.canvas.mpl_connect('key_press_event', self.press)
         plt.tight_layout()
-
 
     def visualize(self, image, state, segmentation=None):
         self.ax.cla()
@@ -683,7 +736,8 @@ class Tracker:
 
         if getattr(self, 'gt_state', None) is not None:
             gt_state = self.gt_state
-            rect = patches.Rectangle((gt_state[0], gt_state[1]), gt_state[2], gt_state[3], linewidth=1, edgecolor='g', facecolor='none')
+            rect = patches.Rectangle((gt_state[0], gt_state[1]), gt_state[2], gt_state[3], linewidth=1, edgecolor='g',
+                                     facecolor='none')
             self.ax.add_patch(rect)
         self.ax.set_axis_off()
         self.ax.axis('equal')
@@ -708,6 +762,3 @@ class Tracker:
     def _read_image(self, image_file: str):
         im = cv.imread(image_file)
         return cv.cvtColor(im, cv.COLOR_BGR2RGB)
-
-
-
